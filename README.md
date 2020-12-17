@@ -1,2 +1,2 @@
-# teach-tools
-Miscellaneous scripts used to make life easier
+# SurveyParser
+Tool to parse peer evaluation surveys, still in Beta phase
