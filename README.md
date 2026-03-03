@@ -6,3 +6,4 @@ SurveyParser is a workflow plus Python script that was developed to quickly turn
 ## Instructions
 1. Download SurveyParser.py
 2. Detailed instructions for using the tool can be found <a href="https://docs.google.com/document/d/1QMVTtaXfieeqiU-wB984zE5TGr7Na4YBNKin5twGjwg/">here</a>
+3. For the survey template and survey parser spreadsheet template, contact cariefrantz@weber.edu
