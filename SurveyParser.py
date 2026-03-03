@@ -1,8 +1,40 @@
 # -*- coding: utf-8 -*-
-"""
+__author__ = 'Carie Frantz'
+__email__ = 'cariefrantz@weber.edu'
+"""Peer Evaluation Survey Parser
+
 Created on Sun Dec 13 10:58:25 2020
 
 @author: cariefrantz
+@project: SurveyParser
+
+COMPILES RESULTS OF PEER EVALUATION SURVEYS FOR GROUP PROJECTS
+This script:
+    - Reads in a formatted peer evaluation survey results spreadsheet
+    - Compiles and exports self- and peer evaluations for each reviewed student
+    
+Arguments:  None
+
+Requirements:
+    Survey response file (xlsx)
+        This is a spreadsheet with the tabs 'ResponseMap', 'PointMap',
+        and 'Form Responses 1', using the template here:
+        https://docs.google.com/spreadsheets/d/1Aor-YiFJnlyhcDzOXK7jcdFW-g0A6wUEbcL8K2eTdTo/edit?usp=sharing
+        
+    Canvas gradebook file (csv)
+        This is a gradebook exported directly from Canvas
+        
+Example in command line:
+    python SurveyParser.py
+
+Dependencies and versions used:
+    python v. 3.11.7 packaged by Anaconda, Inc.
+    numpy (1.26.4)
+    pandas (2.1.4)
+    progress (1.6)
+    os
+    tkinter
+    
 """
 
 
@@ -12,7 +44,6 @@ Created on Sun Dec 13 10:58:25 2020
 ####################
 import os
 from tkinter import Tk, filedialog
-from statistics import mean, stdev
 import numpy as np
 import pandas as pd
 
@@ -71,6 +102,21 @@ def split_email(email):
     '''
     student_id = email.split('@')[0].lower()
     return student_id
+
+
+def get_standardized_name(name, grade_book):
+    '''
+    Checks if a name exists in the gradebook (case-insenstive).
+    Returns the official Canvas name if found, otherwise returns None.
+    '''
+    if pd.isna(name) or str(name).strip() == "" or name in NA_LIST:
+        return None
+    
+    # Check for match ignoring case and trailing/leading spaces
+    matches = grade_book[grade_book['Name'].str.lower() == str(name).strip().lower()]['Name']
+    
+    return matches.iloc[0] if not matches.empty else None
+
 
 def add_empty_cols(dataframe, cols):
     # Adds empty columns with designated headers to the dataframe
@@ -235,14 +281,20 @@ def import_sheet(text='Select file', directory=os.getcwd(), filetype='csv',
         data = pd.read_csv(fpath, sep=',', header=header)
     elif filetype=='xls':
         if not xls_sheet_map:
-            data = pd.read_excel(filepath, header=header)
+            data = pd.read_excel(fpath, header=header)
         else:
             data = {}
             for sheet in xls_sheet_map:
-                sheet_info = xls_sheet_map[sheet]
-                data[sheet] = pd.read_excel(
-                    filepath, sheet_name=sheet_info['sheet'],
-                    header = sheet_info['header'])
+                try:                    
+                    sheet_info = xls_sheet_map[sheet]
+                    data[sheet] = pd.read_excel(
+                        fpath, sheet_name=sheet_info['sheet'],
+                        header = sheet_info['header'])
+                except ValueError as e:
+                    print(f"Error: {e}")
+                    print("Check the sheet name and try again.")
+                else:
+                    print('Successfully read the sheet "' + sheet + '"')
 
     return data, fpath
 
@@ -325,7 +377,14 @@ def process_self_evals(grade_book, survey_results, survey_map, map_points):
         else:
             [student_name] = evals_self.loc[evals_self[col_email]==email,'SE: Name']
             student_name = fix_name(student_name)
-            if student_name not in list(grade_book['Name']):
+            
+            # check for the name (ignoring case)
+            matches = grade_book[
+                grade_book['Name'].str.lower() == student_name.lower()]['Name']
+            if not matches.empty:
+                student_name = matches.iloc[0] # Use the correctly-cased name from Canvas
+            else:
+                # Proceed to manual find if no match found
                 eval_row = survey_results.loc[survey_results[find_columns(
                     survey_map, 'self', 'email',
                     map_col='survey_column')[0]]==email].copy()
@@ -376,8 +435,8 @@ def process_peer_evals(grade_book, survey_results, survey_map, map_points):
         peer_evals = survey_results.loc[
             :,survey_map.loc[survey_map['student']==peer, 'survey_column']]
         peer_evals = np.column_stack((peer_evals.index,peer_evals.values))
-        evals_peer = evals_peer.append(pd.DataFrame(
-            data=peer_evals, columns = evals_peer.columns), ignore_index=True)
+        evals_peer = pd.concat([evals_peer, pd.DataFrame(
+            data=peer_evals, columns = evals_peer.columns)], ignore_index=True)
 
     # Add the peer evaluation columns to the gradebook
     pe_cols = {
@@ -408,17 +467,24 @@ def process_peer_evals(grade_book, survey_results, survey_map, map_points):
         name = evals_peer.loc[peer_eval, col_peername]
         if name in NA_LIST:
             continue
-        if name not in list(grade_book['Name']):
-            name = fix_name(name)
-            if name not in list(grade_book['Name']):
-                eval_row = survey_results.loc[
-                    evals_peer.loc[peer_eval,'review_row']].copy()
-                name = find_student(grade_book, survey_map, eval_row, name)
+        # Check for a case mismatch
+        matches = grade_book[
+            grade_book['Name'].str.lower() == str(name).lower()]['Name']
+        if not matches.empty:
+            name = matches.iloc[0] #Auto-fix the casing to match Canvas
+        # If the name still isn't found, then prompt
+        standardized_name = get_standardized_name(name, grade_book)
+        if standardized_name:
+            name = standardized_name
+        else:
+            eval_row = survey_results.loc[evals_peer.loc[peer_eval,'review_row']].copy()
+            name = find_student(grade_book, survey_map, eval_row, name)
         if name == 'NA':
             continue
         # Add the evaluation to the compiled set
-        evals_peer_compiled[name] = evals_peer_compiled[name].append(
-            evals_peer.loc[peer_eval])
+        evals_peer_compiled[name] = pd.concat(
+            [evals_peer_compiled[name], evals_peer.loc[[peer_eval]]],
+            ignore_index = True)
 
     # Calculate averages, compile comments, and add to gradebook
     for student in evals_peer_compiled:
@@ -468,18 +534,27 @@ def average_ratings(eval_df, pe_cols, map_points):
 
     # Average the ratings
     for c in pe_cols['rating']:
-        avgs[c + ' (avg)'] = round(mean(list(ratings[c])),2)
-        if avgs.loc[0,'PE: N']==1:
-            avgs[c + ' (std)'] = np.nan
+        # Convert columns to a list of numbers, removing non-numeric
+        data = pd.to_numeric(ratings[c], errors='coerce')
+        # Calculate mean, ignoring NaNs
+        if not data.isnull().all():
+            avgs[c + ' (avg)'] = round(np.nanmean(data),2)
         else:
-            avgs[c + ' (std)'] = round(stdev(list(ratings[c])),2)
+            avgs[c + ' (avg)'] = np.nan
+            
+        # Calculate stdev, ignoring NaNs
+        # Note: ddof=1 is a sample standard deviation (same as old stdev)
+        if len(data.dropna()) > 1:
+            avgs[c + ' (std)'] = round(np.nanstd(data, ddof=1), 2)
+        else:
+            avgs[c + ' (std)'] = 0.0
 
     return avgs
 
 
 def convert_ratings(map_points, ratings):
     '''
-    Converts categorical ratings to points
+    Converts categorical ratings to points while handling missing values
 
     Parameters
     ----------
@@ -497,7 +572,13 @@ def convert_ratings(map_points, ratings):
     ratings=ratings.copy()
     for i in ratings.index:
         for c in ratings.columns:
-            ratings.loc[i,c] = map_points[ratings.loc[i,c]]
+            val = ratings.loc[i,c]
+            
+            if pd.isna(val) or val in NA_LIST:
+                ratings.loc[i,c] = np.nan
+            else:
+                # Look up the value in the point map; if not found, return NaN
+                ratings.loc[i,c] = map_points.get(val, np.nan)
     return ratings
 
 
@@ -556,17 +637,27 @@ def find_student(grade_book, survey_map, eval_row, student):
         'email'     : '',
         'name'      : ''
         }
+    
+    # Lookup for identifying categories
     for category in r_info:
-        r_info[category] = eval_row[
-            find_columns(survey_map, 'self', category=category,
-                        map_col='survey_column')[0]]
+        cols = find_columns(survey_map, 'self', category=category,
+                            map_col = 'survey_column')
+        if cols:
+            # If relevant identifiers are used, grab the value from the survey row
+            r_info[category] = str(eval_row[cols[0]])
+        else:
+            # If an identifier is not used (e.g., 'section'), skip it with a placeholder
+            r_info[category] = '[Not in map]'
+            
+
     peer_names = []
     for peer in unique_peers(survey_map):
-        peer_name = eval_row[
-            find_columns(survey_map, peer, category='name',
-                        map_col='survey_column')[0]]
-        if not peer_name in NA_LIST:
-            peer_names.append(peer_name)
+        cols = find_columns(survey_map, peer, category = 'name',
+                            map_col='survey_column')
+        if cols:
+            peer_name = eval_row[cols[0]]
+            if not peer_name in NA_LIST:
+                peer_names.append(peer_name)
 
     # Loop for self-evaluation
     if student == 'self':
@@ -578,28 +669,40 @@ def find_student(grade_book, survey_map, eval_row, student):
                  + '" in Section ' + r_info['section']
                  + ', Team ' + r_info['team']
                  + input_str_end)
-            if (name in list(grade_book['Name'])) or (name in NA_LIST):
+            # case-insensitive name search
+            standardized_name = get_standardized_name(name, grade_book)
+            if standardized_name:
+                name = standardized_name
+                break
+            if name in NA_LIST:
                 break
             print(error_str + name)
 
     # Loop for peer-evaluation
     else:
         while True:
+            # Show identifying info so grader knows which student is which
             name = input(
                 input_str_start
                 + '"' + student + '"'
-                 + '" in Section ' + r_info['section']
-                 + ', Team ' + r_info['team']
+                + ' (reviewed by "' + r_info['name'] + '")'
+                + '" in Section ' + r_info['section']
+                + ', Team ' + r_info['team']
                 + '\nOther team members evaluated by this person: '
                 + r_info['name'] + ', ' + ', '.join(peer_names)
                 + input_str_end)
-            if (name in list(grade_book['Name'])) or (name in NA_LIST):
+            # Check if the name exists regardless of case
+            matches = grade_book[grade_book['Name'].str.lower() == name.lower()]['Name']
+            if not matches.empty:
+                name = matches.iloc[0] # Use the official Canvas casing
+                break
+            if name in NA_LIST:
                 break
             print(error_str + name)
 
     return name
 
-
+#%%
 ####################
 # MAIN
 ####################
@@ -639,7 +742,7 @@ if __name__ == '__main__':
     # Save as a new Excel sheet
     filename = input(
         'Done processing. What would you like to name the processed file?  > ')
-    gradebook.to_excel(dirPath + '/' + filename + '.xls')
+    gradebook.to_excel(dirPath + '/' + filename + '.xlsx')
     print('Saved! All done :)')
 
     # Future work:
